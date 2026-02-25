@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Дождь → Слова</title>
+
+<style>
+body {
+  background:#0b1020;
+  color:#e5e7eb;
+  font-family:system-ui,sans-serif;
+  padding:20px;
+}
+h1 { text-align:center; }
+button {
+  width:100%;
+  padding:14px;
+  margin:6px 0;
+  font-size:16px;
+  border:none;
+  border-radius:10px;
+  background:#2563eb;
+  color:white;
+}
+button.gray { background:#334155; }
+textarea {
+  width:100%;
+  height:120px;
+  margin-top:10px;
+  background:#020617;
+  color:#e5e7eb;
+  border-radius:10px;
+  padding:10px;
+}
+.mode {
+  text-align:center;
+  opacity:.8;
+}
+</style>
+</head>
+
+<body>
+
+<h1>🌧 Дождь → Слова</h1>
+
+<div class="mode" id="modeLabel">Режим: Морзе</div>
+
+<button onclick="toggleMode()">🔄 Переключить режим</button>
+<button onclick="start()">▶️ Слушать</button>
+<button onclick="stop()" class="gray">⏹ Остановить</button>
+<button onclick="convert()" class="gray">🔤 Преобразовать</button>
+
+<h3>Сигналы</h3>
+<textarea id="signals"></textarea>
+
+<h3>Результат</h3>
+<textarea id="result"></textarea>
+
+<script>
+let ctx, analyser, data;
+let running = false;
+let lastSound = 0;
+
+let mode = "morse";
+let signals = "";
+let poetry = "";
+
+const MORSE = {
+  ".-":"А","-...":"Б","--.":"Г","-..":"Д",".":"Е","...":"С",
+  "---":"О","-.":"Н","--":"М","..":"И",".-.":"Р","-.-":"К"
+};
+
+const WORDS = {
+  quiet:["тихо","капли","ночь","сон"],
+  mid:["город","окна","шорох","улицы"],
+  loud:["гром","ветер","память","крик"]
+};
+
+function toggleMode(){
+  mode = mode === "morse" ? "poetry" : "morse";
+  document.getElementById("modeLabel").innerText =
+    "Режим: " + (mode==="morse"?"Морзе":"Дождь → Поэзия");
+}
+
+async function start(){
+  ctx = new (window.AudioContext||window.webkitAudioContext)();
+  const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+  const src = ctx.createMediaStreamSource(stream);
+
+  analyser = ctx.createAnalyser();
+  analyser.fftSize = 256;
+  data = new Uint8Array(analyser.frequencyBinCount);
+
+  src.connect(analyser);
+  running = true;
+  loop();
+}
+
+function stop(){
+  running = false;
+}
+
+function loop(){
+  if(!running) return;
+
+  analyser.getByteFrequencyData(data);
+  let volume = data.reduce((a,b)=>a+b)/data.length;
+  let now = Date.now();
+
+  if(mode==="morse"){
+    if(volume>40){
+      lastSound = now;
+    } else {
+      let d = now-lastSound;
+      if(d>120 && d<300){ signals+="."; lastSound=now; }
+      if(d>=300 && d<700){ signals+="-"; lastSound=now; }
+    }
+    document.getElementById("signals").value = signals;
+  }
+
+  if(mode==="poetry"){
+    if(Math.random()<0.04){
+      poetry += pick(volume)+" ";
+      document.getElementById("result").value = poetry;
+    }
+  }
+
+  requestAnimationFrame(loop);
+}
+
+function pick(v){
+  if(v<20) return rand(WORDS.quiet);
+  if(v<40) return rand(WORDS.mid);
+  return rand(WORDS.loud);
+}
+function rand(a){ return a[Math.floor(Math.random()*a.length)]; }
+
+function convert(){
+  if(mode!=="morse") return;
+
+  let text = "";
+  let parts = signals.split(/(?<=\.)|(?<=-)/);
+
+  let buffer = "";
+  for(let s of signals){
+    if(s==="."||s==="-"){
+      buffer+=s;
+    } else {
+      text += MORSE[buffer]||"";
+      buffer="";
+    }
+  }
+  text += MORSE[buffer]||"";
+
+  document.getElementById("result").value = text;
+}
+</script>
+
+</body>
+</html>
