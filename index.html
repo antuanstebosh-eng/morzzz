@@ -1,161 +1,253 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Дождь → Слова</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Морзе → Текст (с исправлением) v2</title>
+  <meta name="theme-color" content="#111"/>
+  
+  <!-- Подключаем morse-pro с jsDelivr CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/morse-pro@latest/dist/morse-pro.min.js"></script>
 
-<style>
-body {
-  background:#0b1020;
-  color:#e5e7eb;
-  font-family:system-ui,sans-serif;
-  padding:20px;
-}
-h1 { text-align:center; }
-button {
-  width:100%;
-  padding:14px;
-  margin:6px 0;
-  font-size:16px;
-  border:none;
-  border-radius:10px;
-  background:#2563eb;
-  color:white;
-}
-button.gray { background:#334155; }
-textarea {
-  width:100%;
-  height:120px;
-  margin-top:10px;
-  background:#020617;
-  color:#e5e7eb;
-  border-radius:10px;
-  padding:10px;
-}
-.mode {
-  text-align:center;
-  opacity:.8;
-}
-</style>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0a0a0a;
+      color: #0f0;
+      margin: 0;
+      padding: 20px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    h1 { margin: 0 0 16px; font-size: 1.6rem; text-align: center; }
+    #status  { color: #f33; font-weight: bold; text-align: center; margin: 8px 0; }
+    #controls {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin: 16px 0;
+    }
+    button {
+      padding: 12px 24px;
+      font-size: 1.1rem;
+      border: 2px solid #0a0;
+      background: #000;
+      color: #0f0;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.4; }
+    #output {
+      background: #111;
+      border: 1px solid #333;
+      padding: 16px;
+      border-radius: 8px;
+      min-height: 120px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-size: 1.3rem;
+      margin-top: 12px;
+    }
+    #corrected {
+      color: #ff0;
+      margin-top: 8px;
+      font-size: 1.2rem;
+    }
+  </style>
 </head>
-
 <body>
 
-<h1>🌧 Дождь → Слова</h1>
+<h1>Расшифровщик Морзе с микрофона (morse-pro)</h1>
 
-<div class="mode" id="modeLabel">Режим: Морзе</div>
+<div id="status">Нажмите «Начать слушать»</div>
 
-<button onclick="toggleMode()">🔄 Переключить режим</button>
-<button onclick="start()">▶️ Слушать</button>
-<button onclick="stop()" class="gray">⏹ Остановить</button>
-<button onclick="convert()" class="gray">🔤 Преобразовать</button>
+<div id="controls">
+  <button id="startBtn">Начать слушать</button>
+  <button id="stopBtn" disabled>Остановить</button>
+  <button id="clearBtn">Очистить</button>
+</div>
 
-<h3>Сигналы</h3>
-<textarea id="signals"></textarea>
-
-<h3>Результат</h3>
-<textarea id="result"></textarea>
+<div id="output">Здесь появится расшифрованный текст…</div>
+<div id="corrected"></div>
 
 <script>
-let ctx, analyser, data;
-let running = false;
-let lastSound = 0;
+// ────────────────────────────────────────────────
+//  Расширенный словарь для автокоррекции (русский)
+// ────────────────────────────────────────────────
+const RUSSIAN_COMMON_WORDS = [
+  "привет", "здравствуй", "как", "дела", "что", "где", "когда", "почему", "зачем", "кто",
+  "дом", "мама", "папа", "брат", "сестра", "друг", "любовь", "ночь", "день", "вода",
+  "еда", "хлеб", "молоко", "солнце", "луна", "небо", "звезда", "дерево", "цветок",
+  "да", "нет", "может", "хорошо", "плохо", "очень", "спасибо", "пожалуйста", "извини",
+  "люблю", "хочу", "иду", "приду", "буду", "знаю", "понимаю", "сейчас", "потом",
+  "время", "деньги", "работа", "школа", "универ", "город", "машина", "телефон",
+  "компьютер", "интернет", "музыка", "фильм", "книга", "игра", "спорт", "футбол"
+];
 
-let mode = "morse";
-let signals = "";
-let poetry = "";
-
-const MORSE = {
-  ".-":"А","-...":"Б","--.":"Г","-..":"Д",".":"Е","...":"С",
-  "---":"О","-.":"Н","--":"М","..":"И",".-.":"Р","-.-":"К"
-};
-
-const WORDS = {
-  quiet:["тихо","капли","ночь","сон"],
-  mid:["город","окна","шорох","улицы"],
-  loud:["гром","ветер","память","крик"]
-};
-
-function toggleMode(){
-  mode = mode === "morse" ? "poetry" : "morse";
-  document.getElementById("modeLabel").innerText =
-    "Режим: " + (mode==="morse"?"Морзе":"Дождь → Поэзия");
+// ────────────────────────────────────────────────
+//  Простая функция расстояния Левенштейна
+// ────────────────────────────────────────────────
+function levenshtein(a, b) {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix = Array(b.length + 1).fill().map(() => Array(a.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
+  for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
+  for (let j = 1; j <= b.length; j++) {
+    for (let i = 1; i <= a.length; i++) {
+      const indicator = a[i-1] === b[j-1] ? 0 : 1;
+      matrix[j][i] = Math.min(
+        matrix[j][i-1] + 1,             // delete
+        matrix[j-1][i] + 1,             // insert
+        matrix[j-1][i-1] + indicator    // substitute
+      );
+    }
+  }
+  return matrix[b.length][a.length];
 }
 
-async function start(){
-  ctx = new (window.AudioContext||window.webkitAudioContext)();
-  const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-  const src = ctx.createMediaStreamSource(stream);
+function correctWord(maybeWrong) {
+  if (!maybeWrong || maybeWrong.length < 2) return "";
+  maybeWrong = maybeWrong.toLowerCase();
+  let best = maybeWrong;
+  let minDist = Infinity;
 
-  analyser = ctx.createAnalyser();
-  analyser.fftSize = 256;
-  data = new Uint8Array(analyser.frequencyBinCount);
-
-  src.connect(analyser);
-  running = true;
-  loop();
+  for (let word of RUSSIAN_COMMON_WORDS) {
+    const d = levenshtein(maybeWrong, word);
+    if (d < minDist && d <= 2) {   // допускаем до 2 ошибок
+      minDist = d;
+      best = word;
+    }
+  }
+  return (best !== maybeWrong) ? best : "";
 }
 
-function stop(){
-  running = false;
+// ────────────────────────────────────────────────
+//  Используем morse-pro для декодирования
+// ────────────────────────────────────────────────
+const morse = new MorsePro();           // основной класс
+morse.prosigns = true;                  // понимает <AR>, <SK> и т.д. (опционально)
+morse.farnsworth = false;               // пока без фarnsworth spacing
+
+let decoder = new MorseProTiming();     // timing-анализатор (для микрофона)
+decoder.wpm = 20;                       // начальная предполагаемая скорость
+decoder.fw = 20;                        // Farnsworth — можно включить позже
+
+let audioContext = null;
+let analyser = null;
+let micStream = null;
+let animationFrameId = null;
+let isListening = false;
+
+const statusEl    = document.getElementById("status");
+const outputEl    = document.getElementById("output");
+const correctedEl = document.getElementById("corrected");
+const startBtn    = document.getElementById("startBtn");
+const stopBtn     = document.getElementById("stopBtn");
+const clearBtn    = document.getElementById("clearBtn");
+
+let currentText = "";
+let lastCharTime = 0;
+
+async function startListening() {
+  try {
+    if (!audioContext) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const source = audioContext.createMediaStreamSource(micStream);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+
+    statusEl.textContent = "Слушаю... (передавайте морзянку)";
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+
+    currentText = "";
+    outputEl.textContent = "";
+    correctedEl.textContent = "";
+
+    isListening = true;
+    decoder.start();                    // запускаем внутренний таймер morse-pro
+    loop();
+  } catch (err) {
+    statusEl.textContent = "Ошибка микрофона: " + err.message;
+  }
 }
 
-function loop(){
-  if(!running) return;
+function stopListening() {
+  if (micStream) {
+    micStream.getTracks().forEach(t => t.stop());
+    micStream = null;
+  }
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
+  if (decoder) decoder.stop();
+  isListening = false;
+  statusEl.textContent = "Остановлено";
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+}
 
+function loop() {
+  if (!isListening || !analyser) return;
+
+  const data = new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(data);
-  let volume = data.reduce((a,b)=>a+b)/data.length;
-  let now = Date.now();
 
-  if(mode==="morse"){
-    if(volume>40){
-      lastSound = now;
+  // Простой детектор тона (энергия)
+  let sum = 0;
+  for (let v of data) sum += v;
+  const hasTone = sum > 1400;           // подстройте порог под своё устройство
+
+  const now = performance.now();
+
+  // Передаём в morse-pro timing-анализатор
+  decoder.addTiming(hasTone ? 1 : 0, now);
+
+  // Проверяем, появились ли новые символы
+  const newChars = decoder.getCharsSince(lastCharTime);
+  if (newChars && newChars.length > 0) {
+    currentText += newChars;
+    lastCharTime = now;
+
+    outputEl.textContent = currentText;
+
+    // Пытаемся исправить последнее слово
+    const words = currentText.trim().split(/\s+/);
+    const lastWord = words[words.length - 1];
+    const correction = correctWord(lastWord);
+    if (correction) {
+      correctedEl.textContent = `Возможно имелось в виду: ${correction}`;
     } else {
-      let d = now-lastSound;
-      if(d>120 && d<300){ signals+="."; lastSound=now; }
-      if(d>=300 && d<700){ signals+="-"; lastSound=now; }
-    }
-    document.getElementById("signals").value = signals;
-  }
-
-  if(mode==="poetry"){
-    if(Math.random()<0.04){
-      poetry += pick(volume)+" ";
-      document.getElementById("result").value = poetry;
+      correctedEl.textContent = "";
     }
   }
 
-  requestAnimationFrame(loop);
-}
-
-function pick(v){
-  if(v<20) return rand(WORDS.quiet);
-  if(v<40) return rand(WORDS.mid);
-  return rand(WORDS.loud);
-}
-function rand(a){ return a[Math.floor(Math.random()*a.length)]; }
-
-function convert(){
-  if(mode!=="morse") return;
-
-  let text = "";
-  let parts = signals.split(/(?<=\.)|(?<=-)/);
-
-  let buffer = "";
-  for(let s of signals){
-    if(s==="."||s==="-"){
-      buffer+=s;
-    } else {
-      text += MORSE[buffer]||"";
-      buffer="";
-    }
+  // Длинная пауза → пробел между словами (morse-pro обычно сам обрабатывает)
+  if (now - lastCharTime > 1500 && !currentText.endsWith(" ")) {
+    currentText += " ";
+    outputEl.textContent = currentText;
   }
-  text += MORSE[buffer]||"";
 
-  document.getElementById("result").value = text;
+  animationFrameId = requestAnimationFrame(loop);
 }
+
+startBtn.onclick = startListening;
+stopBtn.onclick  = stopListening;
+clearBtn.onclick = () => {
+  currentText = "";
+  lastCharTime = 0;
+  outputEl.textContent = "";
+  correctedEl.textContent = "";
+  if (decoder) decoder.clearBuffer();
+};
+
 </script>
-
 </body>
 </html>
